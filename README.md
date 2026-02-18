@@ -4,12 +4,14 @@ An interactive 3D browser simulation of the Swiss [Räbeliechtli](https://en.wik
 
 ## Features
 
-- **Place & remove turnips** on a canvas backdrop — up to 64 turnips, click an existing one to remove it
-- **Turnip grid generator** — define columns and rows to place a perfectly spaced grid in one click
+- **Place & remove turnips** on a canvas backdrop — up to 900 turnips, click an existing one to remove it
+- **Turnip grid generator** — define columns and rows (1–30 each) to place a perfectly spaced grid in one click
+- **Painting templates** — one-click Cat, Tiger, or Spongebob designs painted in black on the canvas, with turnips auto-placed on all white areas (15×15 candidate grid)
+- **Canvas size sliders** — independently adjust canvas width (0.5–6 m) and height (0.5–8 m) for any aspect ratio
 - **Realistic candle flickering** with multi-frequency sine-wave animation
 - **Dynamic candlelight** — each turnip casts a tight warm cone of light on the canvas using a custom GLSL fragment shader; light fades to zero within ~3× turnip height
 - **Paint the canvas** with a black brush to create lantern silhouettes; black paint retains 10% reflectivity so candlelight still shows through
-- **Candle intensity slider** — dim or brighten all candles simultaneously (affects flame glow, inner cavity, canvas lighting, and spotlights)
+- **Candle intensity slider** — dim or brighten all candles simultaneously (affects flame glow, inner cavity, canvas lighting)
 - **Bloom post-processing** for glowing flames
 
 ## Usage
@@ -33,7 +35,9 @@ Open `index.html` in any modern browser — no build step, no server required.
 |---------|-------------|
 | **Brush Size** slider | Adjusts the paint brush diameter (4–150 px) |
 | **Candle Intensity** slider | Dims or brightens all candles (0–100%) |
-| **Grid Generator** | Set columns (1–8) and rows (1–8), then click **Place Grid** to fill the canvas with an evenly spaced turnip grid |
+| **Canvas Size** sliders | Sets canvas width (0.5–6 m) and height (0.5–8 m) independently |
+| **Grid Generator** | Set columns and rows (1–30 each), then click **Place Grid** to fill the canvas with an evenly spaced turnip grid |
+| **Templates** | Click **Cat**, **Tiger**, or **Spongebob** to paint a template and auto-place turnips on white areas |
 
 ## Technical Details
 
@@ -42,6 +46,6 @@ Open `index.html` in any modern browser — no build step, no server required.
 - Custom GLSL fragment shader for cone-projected candlelight on the canvas plane
   - Tight quadratic falloff (range 0.45 m) for a localised glow
   - Black paint floor of 10% ensures candlelight is never fully absorbed
+  - Turnip position/intensity passed via a `DataTexture` (RGBA float, `MAX_TURNIPS × 1`) instead of uniform arrays — removes WebGL uniform-count limits and supports up to 900 turnips
 - Shared geometries and materials across all turnip instances for performance
-- SpotLight pool (8 lights) for 3D scene illumination
 - `UnrealBloomPass` post-processing for flame glow

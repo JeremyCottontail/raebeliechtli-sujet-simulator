@@ -139,6 +139,62 @@
       color: #fff;
     }
 
+    #canvas-size-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.6);
+    }
+    #canvas-size-group > label {
+      color: #999;
+      font-size: 12px;
+      font-family: sans-serif;
+    }
+    #canvasW, #canvasH {
+      width: 100%;
+      accent-color: #c060ff;
+      cursor: pointer;
+    }
+
+    #templates-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.6);
+    }
+    #templates-group > label {
+      color: #999;
+      font-size: 12px;
+      font-family: sans-serif;
+    }
+    #template-btns {
+      display: flex;
+      gap: 4px;
+    }
+    .template-btn {
+      flex: 1;
+      padding: 5px 4px;
+      background: rgba(100, 20, 160, 0.35);
+      border: 1px solid #7030c0;
+      border-radius: 3px;
+      color: #c090ff;
+      font-family: sans-serif;
+      font-size: 11px;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .template-btn:hover {
+      background: rgba(120, 40, 180, 0.55);
+      color: #fff;
+    }
+
     #turnip-count {
       color: #666;
       font-size: 11px;
@@ -186,19 +242,40 @@
       <label>Candle Intensity: <span id="intensityVal">100</span>%</label>
       <input type="range" id="candleIntensity" min="0" max="100" value="100" />
     </div>
+    <div id="canvas-size-group">
+      <label>Canvas Size</label>
+      <div class="grid-row">
+        <span>Width</span>
+        <span id="canvasWVal">2.5 m</span>
+      </div>
+      <input type="range" id="canvasW" min="0.5" max="6" step="0.1" value="2.5" />
+      <div class="grid-row">
+        <span>Height</span>
+        <span id="canvasHVal">4.0 m</span>
+      </div>
+      <input type="range" id="canvasH" min="0.5" max="8" step="0.1" value="4" />
+    </div>
     <div id="grid-group">
       <label>Grid Generator</label>
       <div class="grid-row">
         <span>Columns</span>
-        <input type="number" id="gridCols" min="1" max="8" value="3" />
+        <input type="number" id="gridCols" min="1" max="30" value="3" />
       </div>
       <div class="grid-row">
         <span>Rows</span>
-        <input type="number" id="gridRows" min="1" max="8" value="3" />
+        <input type="number" id="gridRows" min="1" max="30" value="3" />
       </div>
       <button id="btn-grid">Place Grid</button>
     </div>
-    <div id="turnip-count">Turnips: 0 / 64</div>
+    <div id="templates-group">
+      <label>Templates</label>
+      <div id="template-btns">
+        <button class="template-btn" id="tpl-cat">Cat</button>
+        <button class="template-btn" id="tpl-tiger">Tiger</button>
+        <button class="template-btn" id="tpl-spongebob">Spongebob</button>
+      </div>
+    </div>
+    <div id="turnip-count">Turnips: 0 / 900</div>
   </div>
   <div id="info">Rotate: drag · Paint: click+drag on canvas · Place: click on canvas</div>
 
@@ -211,9 +288,9 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const CANVAS_W     = 2.5;   // metres
-const CANVAS_H     = 4;     // metres
-const MAX_TURNIPS  = 64;
+let CANVAS_W       = 2.5;   // metres (mutable — canvas size sliders update these)
+let CANVAS_H       = 4;     // metres
+const MAX_TURNIPS  = 900;
 const PAINT_W      = 1280;  // px — matches 2.5:4 aspect ratio
 const PAINT_H      = 2048;  // px
 const TURNIP_SCALE = 0.28;  // uniform scale applied to every turnip group
@@ -234,12 +311,11 @@ const CANVAS_VERT = /* glsl */`
 const CANVAS_FRAG = /* glsl */`
   precision highp float;
 
-  #define MAX_TURNIPS 64
+  #define MAX_TURNIPS 900
 
   uniform sampler2D uPaintTex;
+  uniform sampler2D uTurnipData;  // MAX_TURNIPS×1 RGBA float tex: pos.xyz, intensity
   uniform int   uNumTurnips;
-  uniform vec3  uTurnipPos[MAX_TURNIPS];
-  uniform float uTurnipIntensity[MAX_TURNIPS];
   uniform float uConeHalfAngle;
 
   // Warm candle yellow — not orange, not white
@@ -279,9 +355,9 @@ const CANVAS_FRAG = /* glsl */`
 
     for (int i = 0; i < MAX_TURNIPS; i++) {
       if (i >= uNumTurnips) break;
-      float contrib = coneContrib(uTurnipPos[i], vWorldPos, uConeHalfAngle);
-      // Multiply by paint.rgb so black stays black even under candlelight
-      color += max(paint.rgb, vec3(0.1)) * CANDLE_COLOR * contrib * uTurnipIntensity[i] * 3.0;
+      vec4 td = texture2D(uTurnipData, vec2((float(i) + 0.5) / float(MAX_TURNIPS), 0.5));
+      float contrib = coneContrib(td.rgb, vWorldPos, uConeHalfAngle);
+      color += max(paint.rgb, vec3(0.1)) * CANDLE_COLOR * contrib * td.a * 3.0;
     }
 
     gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
@@ -385,18 +461,26 @@ function clearPaintCanvas() {
 }
 
 // ─── Canvas Plane (backdrop) ──────────────────────────────────────────────────
-const posArr       = new Float32Array(MAX_TURNIPS * 3);
-const intensityArr = new Float32Array(MAX_TURNIPS);
+// RGBA float texture: R=pos.x, G=pos.y, B=pos.z, A=flicker intensity
+// Using a texture instead of uniform arrays avoids WebGL uniform-count limits.
+const turnipData    = new Float32Array(MAX_TURNIPS * 4);
+const turnipDataTex = new THREE.DataTexture(
+  turnipData, MAX_TURNIPS, 1, THREE.RGBAFormat, THREE.FloatType
+);
+turnipDataTex.minFilter      = THREE.NearestFilter;
+turnipDataTex.magFilter      = THREE.NearestFilter;
+turnipDataTex.generateMipmaps = false;
+turnipDataTex.flipY           = false;
+turnipDataTex.needsUpdate     = true;
 
 const canvasMat = new THREE.ShaderMaterial({
   vertexShader:   CANVAS_VERT,
   fragmentShader: CANVAS_FRAG,
   uniforms: {
-    uPaintTex:         { value: paintTexture },
-    uNumTurnips:       { value: 0 },
-    uTurnipPos:        { value: posArr },
-    uTurnipIntensity:  { value: intensityArr },
-    uConeHalfAngle:    { value: 0.52 },  // ~30° — wide enough to see cone clearly
+    uPaintTex:      { value: paintTexture },
+    uNumTurnips:    { value: 0 },
+    uTurnipData:    { value: turnipDataTex },
+    uConeHalfAngle: { value: 0.52 },
   },
   side: THREE.FrontSide,
 });
@@ -414,6 +498,23 @@ const border = new THREE.LineSegments(
 border.position.copy(canvasMesh.position);
 border.position.z = 0.002;
 scene.add(border);
+
+// ─── Canvas resize ────────────────────────────────────────────────────────────
+function resizeCanvas(w, h) {
+  CANVAS_W = w;
+  CANVAS_H = h;
+
+  const newGeo = new THREE.PlaneGeometry(w, h, 1, 1);
+
+  canvasMesh.geometry.dispose();
+  canvasMesh.geometry = newGeo;
+  canvasMesh.position.set(0, h / 2, 0);
+
+  border.geometry.dispose();
+  border.geometry = new THREE.EdgesGeometry(newGeo);
+  border.position.copy(canvasMesh.position);
+  border.position.z = 0.002;
+}
 
 // ─── Floor ────────────────────────────────────────────────────────────────────
 const floor = new THREE.Mesh(
@@ -485,7 +586,7 @@ const SHARED_MATS = {
 // Materials moved to SHARED_MATS above — no per-turnip allocation.
 
 // ─── SpotLight pool (8 max Three.js lights) ───────────────────────────────────
-const SPOT_POOL_SIZE = 8;
+const SPOT_POOL_SIZE = 0;
 const spotPool = [];
 for (let i = 0; i < SPOT_POOL_SIZE; i++) {
   const sl = new THREE.SpotLight(0xffcc66, 0, 4.0, Math.PI / 6, 0.5, 2);
@@ -583,17 +684,17 @@ function updateFlicker(time) {
   for (let i = 0; i < n; i++) {
     const t = state.turnips[i];
     const f = computeFlicker(time, t.flickerPhase, t.flickerSpeed);
-    // Subtle flame jitter (local coords, scaled by group)
     t.flameMesh.position.y = 0.380 + (Math.random() - 0.5) * 0.008;
     t.flameMesh.position.x = (Math.random() - 0.5) * 0.006;
-    intensityArr[i] = f * state.candleIntensity;
+    turnipData[i * 4 + 3] = f * state.candleIntensity;
   }
-  canvasMat.uniforms.uTurnipIntensity.value = intensityArr;
+  turnipDataTex.needsUpdate = true;
   canvasMat.uniforms.uNumTurnips.value = n;
 
   const m = Math.min(n, SPOT_POOL_SIZE);
   for (let p = 0; p < m; p++) {
-    spotPool[p].intensity = state.turnips[n - 1 - p].baseIntensity * 0.5 * intensityArr[n - 1 - p];
+    const ti = n - 1 - p;
+    spotPool[p].intensity = state.turnips[ti].baseIntensity * 0.5 * turnipData[ti * 4 + 3];
   }
 }
 
@@ -602,11 +703,12 @@ function syncTurnipPositions() {
   const n = state.turnips.length;
   for (let i = 0; i < n; i++) {
     const pos = state.turnips[i].lightPos;
-    posArr[i * 3]     = pos.x;
-    posArr[i * 3 + 1] = pos.y;
-    posArr[i * 3 + 2] = pos.z;
+    turnipData[i * 4]     = pos.x;
+    turnipData[i * 4 + 1] = pos.y;
+    turnipData[i * 4 + 2] = pos.z;
+    // turnipData[i*4+3] (intensity) is written every frame by updateFlicker
   }
-  canvasMat.uniforms.uTurnipPos.value = posArr;
+  turnipDataTex.needsUpdate = true;
   canvasMat.uniforms.uNumTurnips.value = n;
 }
 
@@ -714,8 +816,8 @@ function placeGrid(cols, rows) {
 }
 
 document.getElementById('btn-grid').addEventListener('click', () => {
-  const cols = Math.max(1, Math.min(8, parseInt(document.getElementById('gridCols').value, 10) || 1));
-  const rows = Math.max(1, Math.min(8, parseInt(document.getElementById('gridRows').value, 10) || 1));
+  const cols = Math.max(1, Math.min(30, parseInt(document.getElementById('gridCols').value, 10) || 1));
+  const rows = Math.max(1, Math.min(30, parseInt(document.getElementById('gridRows').value, 10) || 1));
   placeGrid(cols, rows);
 });
 
@@ -727,6 +829,20 @@ candleIntensityEl.addEventListener('input', () => {
   SHARED_MATS.flame.emissiveIntensity = 9   * state.candleIntensity;
   SHARED_MATS.inner.emissiveIntensity = 1.2 * state.candleIntensity;
 });
+
+const canvasWEl    = document.getElementById('canvasW');
+const canvasHEl    = document.getElementById('canvasH');
+const canvasWValEl = document.getElementById('canvasWVal');
+const canvasHValEl = document.getElementById('canvasHVal');
+function onCanvasSizeInput() {
+  const w = parseFloat(canvasWEl.value);
+  const h = parseFloat(canvasHEl.value);
+  canvasWValEl.textContent = w.toFixed(1) + ' m';
+  canvasHValEl.textContent = h.toFixed(1) + ' m';
+  resizeCanvas(w, h);
+}
+canvasWEl.addEventListener('input', onCanvasSizeInput);
+canvasHEl.addEventListener('input', onCanvasSizeInput);
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
   state.isPointerDown = true;
@@ -754,6 +870,241 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 
 renderer.domElement.addEventListener('pointerup',    () => { state.isPointerDown = false; state.lastUV = null; });
 renderer.domElement.addEventListener('pointerleave', () => { state.isPointerDown = false; state.lastUV = null; });
+
+// ─── Template drawings ────────────────────────────────────────────────────────
+function drawCat(ctx, w, h) {
+  // Peeking cat — large black silhouette rising from the bottom of the canvas,
+  // round eyes with iris + highlight, thin whiskers to canvas edges.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+
+  const cx  = w * 0.5;
+  const hr  = w * 0.40;    // head radius — fills most of the canvas width
+  const hcy = h * 0.80;    // head centre; bottom of head extends just off-canvas
+
+  ctx.fillStyle = '#000000';
+
+  // Left ear (triangle with slight tilt)
+  ctx.beginPath();
+  ctx.moveTo(cx - hr * 0.46, hcy - hr * 0.84);  // inner base
+  ctx.lineTo(cx - hr * 0.80, hcy - hr * 1.34);  // tip
+  ctx.lineTo(cx - hr * 0.73, hcy - hr * 0.72);  // outer base
+  ctx.closePath();
+  ctx.fill();
+
+  // Right ear
+  ctx.beginPath();
+  ctx.moveTo(cx + hr * 0.46, hcy - hr * 0.84);
+  ctx.lineTo(cx + hr * 0.80, hcy - hr * 1.34);
+  ctx.lineTo(cx + hr * 0.73, hcy - hr * 0.72);
+  ctx.closePath();
+  ctx.fill();
+
+  // Head (large filled circle)
+  ctx.beginPath();
+  ctx.arc(cx, hcy, hr, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Eyes: white sclera → black iris → white highlight dot
+  const eyeX = hr * 0.42;
+  const eyeY = hcy - hr * 0.24;
+  const eyeR = hr * 0.285;
+  const irisR = eyeR * 0.68;
+  const hlR   = eyeR * 0.22;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cx - eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#000000';
+  ctx.beginPath(); ctx.arc(cx - eyeX, eyeY, irisR, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + eyeX, eyeY, irisR, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cx - eyeX + irisR * 0.30, eyeY - irisR * 0.36, hlR, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + eyeX + irisR * 0.30, eyeY - irisR * 0.36, hlR, 0, Math.PI * 2); ctx.fill();
+
+  // Whiskers — drawn from face centre to canvas edges; the segments buried inside
+  // the black head silhouette are invisible (black-on-black), only the tips that
+  // emerge beyond the circle show as thin black lines on white background.
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth   = w * 0.005;
+  ctx.lineCap     = 'round';
+  const wy = hcy + hr * 0.06;
+  ctx.beginPath(); ctx.moveTo(cx, wy - hr * 0.04); ctx.lineTo(0, wy - hr * 0.14); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, wy + hr * 0.05); ctx.lineTo(0, wy + hr * 0.10); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, wy - hr * 0.04); ctx.lineTo(w, wy - hr * 0.14); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, wy + hr * 0.05); ctx.lineTo(w, wy + hr * 0.10); ctx.stroke();
+}
+
+function drawTiger(ctx, w, h) {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#000000';
+
+  const cx = w*.5, cy = h*.30, hr = w*.32;
+
+  // Round ears + wide head + body
+  ctx.beginPath(); ctx.arc(cx-hr*.72, cy-hr*.82, hr*.26, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+hr*.72, cy-hr*.82, hr*.26, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx, cy, hr, hr*.90, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx, cy+hr*1.58, hr*.78, hr*1.05, 0, 0, Math.PI*2); ctx.fill();
+
+  // White body stripes
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = w*.032; ctx.lineCap = 'round';
+  for (const xo of [-0.52,-0.22,0.08,0.38,0.68]) {
+    ctx.beginPath(); ctx.moveTo(cx+xo*hr, cy+hr*.65);
+    ctx.quadraticCurveTo(cx+(xo+.05)*hr, cy+hr*1.58, cx+xo*hr, cy+hr*2.52); ctx.stroke();
+  }
+
+  // White face areas
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cx-hr*.72, cy-hr*.82, hr*.14, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+hr*.72, cy-hr*.82, hr*.14, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx-hr*.40, cy-hr*.12, hr*.21, hr*.19, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx+hr*.40, cy-hr*.12, hr*.21, hr*.19, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx, cy+hr*.35, hr*.44, hr*.28, 0, 0, Math.PI*2); ctx.fill();
+
+  // Black face details
+  ctx.fillStyle = '#000000';
+  ctx.beginPath(); ctx.ellipse(cx-hr*.40, cy-hr*.12, hr*.07, hr*.15, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx+hr*.40, cy-hr*.12, hr*.07, hr*.15, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(cx, cy+hr*.18); ctx.lineTo(cx-hr*.12, cy+hr*.35); ctx.lineTo(cx+hr*.12, cy+hr*.35); ctx.closePath(); ctx.fill();
+
+  // Forehead stripes
+  ctx.strokeStyle = '#000000'; ctx.lineWidth = w*.022; ctx.lineCap = 'round';
+  for (const xo of [-0.38,0,0.38]) {
+    ctx.beginPath(); ctx.moveTo(cx+xo*hr, cy-hr*.75);
+    ctx.quadraticCurveTo(cx+xo*hr*.7, cy-hr*.45, cx+xo*hr*.4, cy-hr*.30); ctx.stroke();
+  }
+
+  // Mouth + whiskers
+  ctx.lineWidth = w*.018;
+  ctx.beginPath(); ctx.moveTo(cx, cy+hr*.35); ctx.quadraticCurveTo(cx-hr*.22, cy+hr*.54, cx-hr*.44, cy+hr*.44); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, cy+hr*.35); ctx.quadraticCurveTo(cx+hr*.22, cy+hr*.54, cx+hr*.44, cy+hr*.44); ctx.stroke();
+  ctx.lineWidth = w*.012;
+  for (const dy of [.30,.40,.48]) {
+    ctx.beginPath(); ctx.moveTo(cx-hr*.12, cy+dy*hr); ctx.lineTo(cx-hr*.92, cy+dy*hr); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx+hr*.12, cy+dy*hr); ctx.lineTo(cx+hr*.92, cy+dy*hr); ctx.stroke();
+  }
+}
+
+function drawSpongebob(ctx, w, h) {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#000000';
+
+  const cx = w*.5;
+  const bw = w*.54, bh = h*.52, bx = cx-bw*.5, by = h*.16;
+  const pantsY = by + bh*.65;
+
+  // Body
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, bw*.06); ctx.fill();
+
+  // Sponge holes (white)
+  ctx.fillStyle = '#ffffff';
+  for (const [rx,ry,rr] of [
+    [.18,.10,.055],[.55,.07,.042],[.82,.16,.060],
+    [.10,.28,.044],[.38,.24,.070],[.72,.26,.050],
+    [.88,.34,.042],[.24,.40,.052],[.60,.38,.062],
+    [.12,.52,.060],[.45,.55,.040],[.80,.50,.052],
+  ]) {
+    const hy = by + ry*(bh*.62);
+    if (hy < pantsY-4) { ctx.beginPath(); ctx.arc(bx+rx*bw, hy, rr*bw, 0, Math.PI*2); ctx.fill(); }
+  }
+
+  // Belt (white line + black buckle)
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(bx, pantsY-2, bw, h*.018);
+  ctx.fillStyle = '#000000'; ctx.fillRect(cx-bw*.08, pantsY-4, bw*.16, h*.035);
+
+  // Eyes
+  const eyeR = bw*.155, eyeY = by+bh*.21;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cx-bw*.22, eyeY, eyeR, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+bw*.22, eyeY, eyeR, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#000000'; ctx.lineWidth = w*.016;
+  ctx.beginPath(); ctx.arc(cx-bw*.22, eyeY, eyeR, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx+bw*.22, eyeY, eyeR, 0, Math.PI*2); ctx.stroke();
+
+  // Pupils
+  ctx.fillStyle = '#000000';
+  ctx.beginPath(); ctx.arc(cx-bw*.22+eyeR*.30, eyeY+eyeR*.20, eyeR*.50, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+bw*.22-eyeR*.30, eyeY+eyeR*.20, eyeR*.50, 0, Math.PI*2); ctx.fill();
+
+  // Eyelashes
+  ctx.lineWidth = w*.013; ctx.lineCap = 'round';
+  for (const side of [-1,1]) {
+    const ex = cx + side*bw*.22;
+    for (const ang of [-0.4,0,0.4]) {
+      ctx.beginPath();
+      ctx.moveTo(ex+Math.sin(ang)*eyeR, eyeY-eyeR*.90);
+      ctx.lineTo(ex+Math.sin(ang)*eyeR*1.5, eyeY-eyeR*1.45); ctx.stroke();
+    }
+  }
+
+  // Nose
+  ctx.fillStyle = '#000000';
+  ctx.beginPath(); ctx.ellipse(cx, by+bh*.41, bw*.04, bw*.06, 0, 0, Math.PI*2); ctx.fill();
+
+  // Mouth (white teeth half-ellipse)
+  const mouthY = by+bh*.52;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.ellipse(cx, mouthY+h*.018, bw*.28, h*.052, 0, 0, Math.PI); ctx.fill();
+  ctx.strokeStyle = '#000000'; ctx.lineWidth = w*.016;
+  ctx.beginPath(); ctx.ellipse(cx, mouthY+h*.018, bw*.28, h*.052, 0, 0, Math.PI); ctx.stroke();
+  ctx.lineWidth = w*.014;
+  for (let i = 1; i < 4; i++) {
+    const tx = (cx-bw*.28) + (bw*.56*i/4);
+    ctx.beginPath(); ctx.moveTo(tx, mouthY+h*.002); ctx.lineTo(tx, mouthY+h*.044); ctx.stroke();
+  }
+
+  // Tie
+  const tieTopY = mouthY+h*.068;
+  ctx.fillStyle = '#000000';
+  ctx.beginPath(); ctx.arc(cx, tieTopY, bw*.050, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(cx-bw*.065, tieTopY+h*.008); ctx.lineTo(cx+bw*.065, tieTopY+h*.008); ctx.lineTo(cx, pantsY-h*.008); ctx.closePath(); ctx.fill();
+
+  // Freckles
+  for (const side of [-1,1]) {
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath(); ctx.arc(cx+side*(bw*.30+i*bw*.09), eyeY+eyeR*1.25, w*.010, 0, Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+function applyTemplate(drawFn) {
+  clearTurnips();
+  clearPaintCanvas();
+  drawFn(paintCtx, PAINT_W, PAINT_H);
+  paintTexture.needsUpdate = true;
+
+  const GRID = 15;
+  const hw   = 0.230 * TURNIP_SCALE, hh = 0.500 * TURNIP_SCALE;
+  const xMin = -CANVAS_W / 2 + hw, xMax = CANVAS_W / 2 - hw;
+  const yMin = hh, yMax = CANVAS_H - hh * 0.1;
+  const imageData = paintCtx.getImageData(0, 0, PAINT_W, PAINT_H);
+
+  for (let r = 0; r < GRID && state.turnips.length < MAX_TURNIPS; r++) {
+    for (let c = 0; c < GRID && state.turnips.length < MAX_TURNIPS; c++) {
+      const x = xMin + (xMax - xMin) * (c / (GRID - 1));
+      const y = yMin + (yMax - yMin) * (r / (GRID - 1));
+      const px  = Math.max(0, Math.min(PAINT_W - 1, Math.floor((x + CANVAS_W / 2) / CANVAS_W * PAINT_W)));
+      const py  = Math.max(0, Math.min(PAINT_H - 1, Math.floor((1 - y / CANVAS_H) * PAINT_H)));
+      const idx = (py * PAINT_W + px) * 4;
+      if (imageData.data[idx] + imageData.data[idx+1] + imageData.data[idx+2] > 600) {
+        state.turnips.push(createTurnipInstance(new THREE.Vector3(x, y, 0)));
+      }
+    }
+  }
+  syncTurnipPositions();
+  assignSpotLights();
+  document.getElementById('turnip-count').textContent =
+    `Turnips: ${state.turnips.length} / ${MAX_TURNIPS}`;
+}
+
+document.getElementById('tpl-cat'      ).addEventListener('click', () => applyTemplate(drawCat));
+document.getElementById('tpl-tiger'    ).addEventListener('click', () => applyTemplate(drawTiger));
+document.getElementById('tpl-spongebob').addEventListener('click', () => applyTemplate(drawSpongebob));
 
 // ─── Animation Loop ───────────────────────────────────────────────────────────
 const clock = new THREE.Clock();
