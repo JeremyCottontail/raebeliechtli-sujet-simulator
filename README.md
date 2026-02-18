@@ -4,31 +4,44 @@ An interactive 3D browser simulation of the Swiss [Räbeliechtli](https://en.wik
 
 ## Features
 
-- **Place turnips** on a canvas backdrop — up to 64 turnips
+- **Place & remove turnips** on a canvas backdrop — up to 64 turnips, click an existing one to remove it
+- **Turnip grid generator** — define columns and rows to place a perfectly spaced grid in one click
 - **Realistic candle flickering** with multi-frequency sine-wave animation
-- **Dynamic candlelight** — each turnip casts a warm cone of light on the canvas using a custom GLSL fragment shader
-- **Paint the canvas** with a black brush before placing turnips to create lantern silhouettes
-- **Candle intensity slider** — dim or brighten all candles simultaneously
+- **Dynamic candlelight** — each turnip casts a tight warm cone of light on the canvas using a custom GLSL fragment shader; light fades to zero within ~3× turnip height
+- **Paint the canvas** with a black brush to create lantern silhouettes; black paint retains 10% reflectivity so candlelight still shows through
+- **Candle intensity slider** — dim or brighten all candles simultaneously (affects flame glow, inner cavity, canvas lighting, and spotlights)
 - **Bloom post-processing** for glowing flames
 
 ## Usage
 
 Open `index.html` in any modern browser — no build step, no server required.
 
-| Mode | Action |
-|------|--------|
+### Toolbar
+
+| Button | Action |
+|--------|--------|
 | **Rotate** | Click + drag to orbit the scene |
 | **Paint Black** | Click + drag on the canvas to paint |
-| **Place Turnip** | Click on the canvas to place a turnip |
-| **Clear Canvas** | Resets the canvas to white |
+| **Place/Remove Turnip** | Click empty canvas to place a turnip; click an existing turnip to remove it |
+| **Clear Canvas/Painting** | Resets the canvas paint to white |
+| **Clear Turnips** | Removes all placed turnips |
+| **Clear All** | Removes all turnips and resets the canvas |
 
-Use the **Brush Size** slider to adjust the paint brush and the **Candle Intensity** slider to control the brightness of all candles.
+### Controls
+
+| Control | Description |
+|---------|-------------|
+| **Brush Size** slider | Adjusts the paint brush diameter (4–150 px) |
+| **Candle Intensity** slider | Dims or brightens all candles (0–100%) |
+| **Grid Generator** | Set columns (1–8) and rows (1–8), then click **Place Grid** to fill the canvas with an evenly spaced turnip grid |
 
 ## Technical Details
 
 - Single-file app (`index.html`) — pure HTML/CSS/JS, no build tooling
 - [Three.js](https://threejs.org/) v0.169 (loaded via CDN) for 3D rendering
-- Custom GLSL shader for cone-projected candlelight on the canvas plane
+- Custom GLSL fragment shader for cone-projected candlelight on the canvas plane
+  - Tight quadratic falloff (range 0.45 m) for a localised glow
+  - Black paint floor of 10% ensures candlelight is never fully absorbed
 - Shared geometries and materials across all turnip instances for performance
 - SpotLight pool (8 lights) for 3D scene illumination
 - `UnrealBloomPass` post-processing for flame glow
