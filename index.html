@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Räbeliechtli Simulator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
+    canvas { display: block; }
+
+    #ui {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 100;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border: 2px solid #444;
+      background: rgba(0, 0, 0, 0.75);
+      color: #ccc;
+      font-family: sans-serif;
+      font-size: 14px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+      user-select: none;
+      min-width: 130px;
+      text-align: left;
+    }
+    .btn.active {
+      border-color: #c060ff;
+      background: rgba(100, 20, 160, 0.5);
+      color: #fff;
+    }
+    .btn:hover:not(.active) {
+      border-color: #888;
+      color: #fff;
+    }
+
+    #brush-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.6);
+    }
+    #brush-group label {
+      color: #999;
+      font-size: 12px;
+      font-family: sans-serif;
+    }
+    #brushSize {
+      width: 100%;
+      accent-color: #c060ff;
+      cursor: pointer;
+    }
+
+    #intensity-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.6);
+    }
+    #intensity-group label {
+      color: #999;
+      font-size: 12px;
+      font-family: sans-serif;
+    }
+    #candleIntensity {
+      width: 100%;
+      accent-color: #c060ff;
+      cursor: pointer;
+    }
+
+    #turnip-count {
+      color: #666;
+      font-size: 11px;
+      font-family: monospace;
+      padding: 4px 8px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 3px;
+    }
+
+    #info {
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #444;
+      font-family: sans-serif;
+      font-size: 11px;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="ui">
+    <button class="btn active" id="btn-rotate">Rotate</button>
+    <button class="btn"        id="btn-paint" >Paint Black</button>
+    <button class="btn"        id="btn-place" >Place Turnip</button>
+    <button class="btn"        id="btn-clear" >Clear Canvas</button>
+    <div id="brush-group">
+      <label>Brush Size: <span id="brushVal">20</span> px</label>
+      <input type="range" id="brushSize" min="4" max="150" value="20" />
+    </div>
+    <div id="intensity-group">
+      <label>Candle Intensity: <span id="intensityVal">100</span>%</label>
+      <input type="range" id="candleIntensity" min="0" max="100" value="100" />
+    </div>
+    <div id="turnip-count">Turnips: 0 / 64</div>
+  </div>
+  <div id="info">Rotate: drag · Paint: click+drag on canvas · Place: click on canvas</div>
+
+  <script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const CANVAS_W     = 2.5;   // metres
+const CANVAS_H     = 4;     // metres
+const MAX_TURNIPS  = 64;
+const PAINT_W      = 1280;  // px — matches 2.5:4 aspect ratio
+const PAINT_H      = 2048;  // px
+const TURNIP_SCALE = 0.28;  // uniform scale applied to every turnip group
+
+// ─── GLSL Shaders ─────────────────────────────────────────────────────────────
+
+const CANVAS_VERT = /* glsl */`
+  varying vec2 vUv;
+  varying vec3 vWorldPos;
+
+  void main() {
+    vUv = uv;
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const CANVAS_FRAG = /* glsl */`
+  precision highp float;
+
+  #define MAX_TURNIPS 64
+
+  uniform sampler2D uPaintTex;
+  uniform int   uNumTurnips;
+  uniform vec3  uTurnipPos[MAX_TURNIPS];
+  uniform float uTurnipIntensity[MAX_TURNIPS];
+  uniform float uConeHalfAngle;
+
+  // Warm candle yellow — not orange, not white
+  const vec3 CANDLE_COLOR = vec3(1.0, 0.82, 0.38);
+
+  varying vec2 vUv;
+  varying vec3 vWorldPos;
+
+  float coneContrib(vec3 lightPos, vec3 fragPos, float halfAngle) {
+    vec3 toFrag = fragPos - lightPos;
+    float dist  = length(toFrag);
+    if (dist < 0.001) return 0.0;
+
+    vec3 toFragN = toFrag / dist;
+
+    // Cone axis points straight up (+Y)
+    float cosTheta = dot(vec3(0.0, 1.0, 0.0), toFragN);
+    float cosEdge  = cos(halfAngle);
+    if (cosTheta < cosEdge) return 0.0;
+
+    float cosInner = cos(halfAngle * 0.5);
+    float edge = smoothstep(cosEdge, cosInner, cosTheta);
+
+    // Tight falloff — full brightness at the opening, fades to ~0 within 3× turnip height (~0.45m)
+    float range = 0.45;
+    float att = pow(max(1.0 - dist / range, 0.0), 2.0);
+
+    return edge * att;
+  }
+
+  void main() {
+    vec4 paint = texture2D(uPaintTex, vUv);
+
+    // Dim ambient so canvas is just barely visible in the dark scene.
+    // Black paint stays near-black; white paint becomes off-white in ambient.
+    vec3 color = paint.rgb * 0.12;
+
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+      if (i >= uNumTurnips) break;
+      float contrib = coneContrib(uTurnipPos[i], vWorldPos, uConeHalfAngle);
+      // Multiply by paint.rgb so black stays black even under candlelight
+      color += max(paint.rgb, vec3(0.1)) * CANDLE_COLOR * contrib * uTurnipIntensity[i] * 3.0;
+    }
+
+    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  }
+`;
+
+// ─── State ────────────────────────────────────────────────────────────────────
+const state = {
+  mode: 'rotate',
+  brushSize: 20,
+  isPointerDown: false,
+  lastUV: null,
+  turnips: [],
+  candleIntensity: 1.0,
+};
+
+// ─── Renderer ─────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = false;
+document.body.appendChild(renderer.domElement);
+
+// ─── Scene & camera ───────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const camera = new THREE.PerspectiveCamera(
+  50,
+  window.innerWidth / window.innerHeight,
+  0.01,
+  300
+);
+camera.position.set(0, 2, 5);
+
+// ─── Orbit Controls ───────────────────────────────────────────────────────────
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 0.5;
+controls.maxDistance = 20;
+controls.update();
+
+// ─── Post-processing ──────────────────────────────────────────────────────────
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(Math.floor(window.innerWidth * 0.5), Math.floor(window.innerHeight * 0.5)),
+  0.6,   // strength — subtle, not overwhelming
+  0.4,   // radius
+  1.20   // threshold — only the bright flame blooms, turnip body stays clean
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// ─── Ambient lighting ─────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x110022, 0.4));
+scene.add(new THREE.HemisphereLight(0x220033, 0x000000, 0.2));
+
+// ─── Paint Texture ────────────────────────────────────────────────────────────
+const paintCanvas = document.createElement('canvas');
+paintCanvas.width  = PAINT_W;
+paintCanvas.height = PAINT_H;
+const paintCtx = paintCanvas.getContext('2d');
+paintCtx.fillStyle = '#ffffff';
+paintCtx.fillRect(0, 0, PAINT_W, PAINT_H);
+
+const paintTexture = new THREE.CanvasTexture(paintCanvas);
+paintTexture.colorSpace = THREE.SRGBColorSpace;
+paintTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+function paintAt(u, v, brushPx, prevUV) {
+  const x = u * PAINT_W;
+  const y = (1 - v) * PAINT_H;
+  paintCtx.fillStyle = 'rgba(0,0,0,0.9)';
+  if (prevUV) {
+    const px0 = prevUV.u * PAINT_W;
+    const py0 = (1 - prevUV.v) * PAINT_H;
+    const dx = x - px0, dy = y - py0;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / (brushPx * 0.25)));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      paintCtx.beginPath();
+      paintCtx.arc(px0 + dx * t, py0 + dy * t, brushPx * 0.5, 0, Math.PI * 2);
+      paintCtx.fill();
+    }
+  } else {
+    paintCtx.beginPath();
+    paintCtx.arc(x, y, brushPx * 0.5, 0, Math.PI * 2);
+    paintCtx.fill();
+  }
+  paintTexture.needsUpdate = true;
+}
+
+function clearPaintCanvas() {
+  paintCtx.fillStyle = '#ffffff';
+  paintCtx.fillRect(0, 0, PAINT_W, PAINT_H);
+  paintTexture.needsUpdate = true;
+}
+
+// ─── Canvas Plane (backdrop) ──────────────────────────────────────────────────
+const posArr       = new Float32Array(MAX_TURNIPS * 3);
+const intensityArr = new Float32Array(MAX_TURNIPS);
+
+const canvasMat = new THREE.ShaderMaterial({
+  vertexShader:   CANVAS_VERT,
+  fragmentShader: CANVAS_FRAG,
+  uniforms: {
+    uPaintTex:         { value: paintTexture },
+    uNumTurnips:       { value: 0 },
+    uTurnipPos:        { value: posArr },
+    uTurnipIntensity:  { value: intensityArr },
+    uConeHalfAngle:    { value: 0.52 },  // ~30° — wide enough to see cone clearly
+  },
+  side: THREE.FrontSide,
+});
+
+const canvasGeo  = new THREE.PlaneGeometry(CANVAS_W, CANVAS_H, 1, 1);
+const canvasMesh = new THREE.Mesh(canvasGeo, canvasMat);
+canvasMesh.position.set(0, CANVAS_H / 2, 0);
+scene.add(canvasMesh);
+
+// Border lines around the canvas
+const border = new THREE.LineSegments(
+  new THREE.EdgesGeometry(canvasGeo),
+  new THREE.LineBasicMaterial({ color: 0x333333 })
+);
+border.position.copy(canvasMesh.position);
+border.position.z = 0.002;
+scene.add(border);
+
+// ─── Floor ────────────────────────────────────────────────────────────────────
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(12, 10),
+  new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 1 })
+);
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+
+// ─── Turnip geometry (shared) ─────────────────────────────────────────────────
+function getTurnipOuterProfile() {
+  // Nearly spherical turnip — max girth at 55% height, symmetric curves.
+  // Large opening (outer rim 0.140) so interior & flame are clearly visible.
+  return [
+    new THREE.Vector2(0.000, 0.000),  // pointed tip
+    new THREE.Vector2(0.055, 0.055),  // starts widening fast
+    new THREE.Vector2(0.140, 0.140),  // lower quadrant — near-circular arc
+    new THREE.Vector2(0.210, 0.250),  // belly
+    new THREE.Vector2(0.230, 0.320),  // maximum girth
+    new THREE.Vector2(0.220, 0.390),  // upper belly — mirrors lower
+    new THREE.Vector2(0.185, 0.445),  // shoulder, smooth
+    new THREE.Vector2(0.145, 0.490),  // short neck
+    new THREE.Vector2(0.140, 0.500),  // wide top opening
+  ];
+}
+
+function getTurnipInnerProfile() {
+  // Hollow cavity — ~18mm wall thickness throughout.
+  return [
+    new THREE.Vector2(0.000, 0.210),  // flat cavity bottom
+    new THREE.Vector2(0.070, 0.265),
+    new THREE.Vector2(0.140, 0.355),
+    new THREE.Vector2(0.165, 0.420),
+    new THREE.Vector2(0.148, 0.462),
+    new THREE.Vector2(0.118, 0.490),
+    new THREE.Vector2(0.112, 0.500),  // inner rim edge
+  ];
+}
+
+const OUTER_GEO  = new THREE.LatheGeometry(getTurnipOuterProfile(), 40);
+const INNER_GEO  = new THREE.LatheGeometry(getTurnipInnerProfile(), 40);
+const RIM_GEO    = new THREE.RingGeometry(0.112, 0.140, 40);  // wide carved-wall rim
+const CANDLE_GEO = new THREE.CylinderGeometry(0.008, 0.008, 0.12, 8);
+const FLAME_GEO  = new THREE.SphereGeometry(0.014, 8, 8);
+
+// ─── Shared turnip materials (created ONCE, reused across all turnips) ────────
+const SHARED_MATS = {
+  outer: new THREE.MeshStandardMaterial({
+    color: 0xf0eaff, emissive: new THREE.Color(0x220044),
+    emissiveIntensity: 0.5, roughness: 0.75, side: THREE.DoubleSide,
+  }),
+  inner: new THREE.MeshStandardMaterial({
+    color: 0xffe0c0, emissive: new THREE.Color(0xff7700),
+    emissiveIntensity: 1.2, roughness: 0.9, side: THREE.BackSide,
+  }),
+  rim: new THREE.MeshStandardMaterial({
+    color: 0xeee8ff, emissive: new THREE.Color(0x330055),
+    emissiveIntensity: 0.4, roughness: 0.7, side: THREE.DoubleSide,
+  }),
+  candle: new THREE.MeshStandardMaterial({
+    color: 0xfff8e8, emissive: new THREE.Color(0xffddaa), emissiveIntensity: 1.0,
+  }),
+  flame: new THREE.MeshStandardMaterial({
+    color: 0xffff99, emissive: new THREE.Color(0xffcc44),
+    emissiveIntensity: 9, transparent: true, opacity: 0.92,
+  }),
+};
+
+// Materials moved to SHARED_MATS above — no per-turnip allocation.
+
+// ─── SpotLight pool (8 max Three.js lights) ───────────────────────────────────
+const SPOT_POOL_SIZE = 8;
+const spotPool = [];
+for (let i = 0; i < SPOT_POOL_SIZE; i++) {
+  const sl = new THREE.SpotLight(0xffcc66, 0, 4.0, Math.PI / 6, 0.5, 2);
+  sl.visible = false;
+  sl.castShadow = false;
+  scene.add(sl);
+  scene.add(sl.target);
+  spotPool.push(sl);
+}
+
+function assignSpotLights() {
+  const n = state.turnips.length;
+  for (let p = 0; p < SPOT_POOL_SIZE; p++) {
+    const sl = spotPool[p];
+    const ti = n - 1 - p;
+    if (ti < 0) {
+      sl.visible = false;
+      sl.intensity = 0;
+    } else {
+      const t = state.turnips[ti];
+      sl.visible = true;
+      sl.position.copy(t.lightPos);
+      sl.target.position.set(t.lightPos.x, t.lightPos.y + 4, 0.0);
+      sl.target.updateMatrixWorld();
+      sl.intensity = t.baseIntensity;
+    }
+  }
+}
+
+// ─── Turnip instance ──────────────────────────────────────────────────────────
+function createTurnipInstance(worldPos) {
+  const TS = TURNIP_SCALE;
+
+  const rimMesh = new THREE.Mesh(RIM_GEO, SHARED_MATS.rim);
+  rimMesh.rotation.x = -Math.PI / 2;
+  rimMesh.position.y = 0.500;
+
+  const candleMesh = new THREE.Mesh(CANDLE_GEO, SHARED_MATS.candle);
+  candleMesh.position.y = 0.295;
+
+  const flameMesh = new THREE.Mesh(FLAME_GEO, SHARED_MATS.flame);
+  flameMesh.position.y = 0.380;  // visible above inner cavity bottom, below wide opening
+
+  const group = new THREE.Group();
+  group.add(
+    new THREE.Mesh(OUTER_GEO, SHARED_MATS.outer),
+    new THREE.Mesh(INNER_GEO, SHARED_MATS.inner),
+    rimMesh, candleMesh, flameMesh
+  );
+
+  // Scale the whole group — all children scale uniformly
+  group.scale.setScalar(TS);
+
+  group.position.copy(worldPos);
+  group.position.z += 0.230 * TS;  // push forward by scaled max radius
+  // Keep turnip within canvas bounds (account for scaled half-width)
+  const hw = 0.230 * TS;
+  const hh = 0.500 * TS;
+  group.position.y = Math.max(hh, Math.min(CANVAS_H - hh * 0.1, group.position.y));
+  group.position.x = Math.max(-CANVAS_W / 2 + hw, Math.min(CANVAS_W / 2 - hw, group.position.x));
+
+  scene.add(group);
+
+  // No per-turnip PointLight — kills performance at 20+ turnips.
+  // The SpotLight pool handles 3D scene illumination; emissive materials
+  // give the warm inner glow; the canvas shader handles backdrop lighting.
+
+  // lightPos sits at the BASE of the turnip (in world Y), at the canvas surface (z=0).
+  // This means the cone has already spread to ~2× the opening radius by the time
+  // it reaches the turnip top — no sharp point, immediate width at exit.
+  const lightPos = new THREE.Vector3(
+    group.position.x,
+    group.position.y,         // base of turnip in world space
+    0.0                       // at canvas surface
+  );
+
+  return {
+    group, flameMesh, lightPos,
+    flickerPhase: [Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2],
+    flickerSpeed: [1.8 + Math.random() * 1.2, 4.5 + Math.random() * 2.0, 0.4 + Math.random() * 0.6],
+    baseIntensity: 2.5 + Math.random() * 1.0,
+  };
+}
+
+// ─── Flicker ──────────────────────────────────────────────────────────────────
+function computeFlicker(time, phase, speed) {
+  const raw = Math.sin(time * speed[0] * Math.PI * 2 + phase[0]) * 0.50
+            + Math.sin(time * speed[1] * Math.PI * 2 + phase[1]) * 0.30
+            + Math.sin(time * speed[2] * Math.PI * 2 + phase[2]) * 0.20;
+  return Math.max(0.30, Math.min(1.0, 0.55 + (raw + 1.0) * 0.225));
+}
+
+function updateFlicker(time) {
+  const n = state.turnips.length;
+  for (let i = 0; i < n; i++) {
+    const t = state.turnips[i];
+    const f = computeFlicker(time, t.flickerPhase, t.flickerSpeed);
+    // Subtle flame jitter (local coords, scaled by group)
+    t.flameMesh.position.y = 0.380 + (Math.random() - 0.5) * 0.008;
+    t.flameMesh.position.x = (Math.random() - 0.5) * 0.006;
+    intensityArr[i] = f * state.candleIntensity;
+  }
+  canvasMat.uniforms.uTurnipIntensity.value = intensityArr;
+  canvasMat.uniforms.uNumTurnips.value = n;
+
+  const m = Math.min(n, SPOT_POOL_SIZE);
+  for (let p = 0; p < m; p++) {
+    spotPool[p].intensity = state.turnips[n - 1 - p].baseIntensity * 0.5 * intensityArr[n - 1 - p];
+  }
+}
+
+// ─── Uniform sync ─────────────────────────────────────────────────────────────
+function syncTurnipPositions() {
+  const n = state.turnips.length;
+  for (let i = 0; i < n; i++) {
+    const pos = state.turnips[i].lightPos;
+    posArr[i * 3]     = pos.x;
+    posArr[i * 3 + 1] = pos.y;
+    posArr[i * 3 + 2] = pos.z;
+  }
+  canvasMat.uniforms.uTurnipPos.value = posArr;
+  canvasMat.uniforms.uNumTurnips.value = n;
+}
+
+// ─── Raycasting ───────────────────────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const mouseNDC  = new THREE.Vector2();
+
+function raycastCanvas(event) {
+  mouseNDC.x =  (event.clientX / window.innerWidth)  * 2 - 1;
+  mouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouseNDC, camera);
+  const hits = raycaster.intersectObject(canvasMesh, false);
+  return hits.length > 0 ? hits[0] : null;
+}
+
+function placeTurnip(event) {
+  if (state.turnips.length >= MAX_TURNIPS) return;
+  const hit = raycastCanvas(event);
+  if (!hit) return;
+  state.turnips.push(createTurnipInstance(hit.point));
+  syncTurnipPositions();
+  assignSpotLights();
+  document.getElementById('turnip-count').textContent =
+    `Turnips: ${state.turnips.length} / ${MAX_TURNIPS}`;
+}
+
+// ─── UI & Interaction ─────────────────────────────────────────────────────────
+const modeButtons = {
+  rotate: document.getElementById('btn-rotate'),
+  paint:  document.getElementById('btn-paint'),
+  place:  document.getElementById('btn-place'),
+};
+
+function setMode(mode) {
+  state.mode = mode;
+  controls.enabled = (mode === 'rotate');
+  for (const [m, btn] of Object.entries(modeButtons)) {
+    btn.classList.toggle('active', m === mode);
+  }
+  renderer.domElement.style.cursor = { rotate: 'grab', paint: 'crosshair', place: 'cell' }[mode];
+}
+
+modeButtons.rotate.addEventListener('click', () => setMode('rotate'));
+modeButtons.paint.addEventListener ('click', () => setMode('paint'));
+modeButtons.place.addEventListener ('click', () => setMode('place'));
+document.getElementById('btn-clear').addEventListener('click', clearPaintCanvas);
+
+const brushSizeEl = document.getElementById('brushSize');
+const brushValEl  = document.getElementById('brushVal');
+brushSizeEl.addEventListener('input', () => {
+  state.brushSize = parseInt(brushSizeEl.value, 10);
+  brushValEl.textContent = state.brushSize;
+});
+
+const candleIntensityEl = document.getElementById('candleIntensity');
+const intensityValEl    = document.getElementById('intensityVal');
+candleIntensityEl.addEventListener('input', () => {
+  state.candleIntensity = parseInt(candleIntensityEl.value, 10) / 100;
+  intensityValEl.textContent = candleIntensityEl.value;
+  SHARED_MATS.flame.emissiveIntensity = 9   * state.candleIntensity;
+  SHARED_MATS.inner.emissiveIntensity = 1.2 * state.candleIntensity;
+});
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  state.isPointerDown = true;
+  state.lastUV = null;
+  if (state.mode === 'paint') {
+    const hit = raycastCanvas(e);
+    if (hit && hit.uv) {
+      paintAt(hit.uv.x, hit.uv.y, state.brushSize, null);
+      state.lastUV = { u: hit.uv.x, v: hit.uv.y };
+    }
+  } else if (state.mode === 'place') {
+    placeTurnip(e);
+  }
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!state.isPointerDown || state.mode !== 'paint') return;
+  const hit = raycastCanvas(e);
+  if (!hit || !hit.uv) return;
+  paintAt(hit.uv.x, hit.uv.y, state.brushSize, state.lastUV);
+  state.lastUV = { u: hit.uv.x, v: hit.uv.y };
+});
+
+renderer.domElement.addEventListener('pointerup',    () => { state.isPointerDown = false; state.lastUV = null; });
+renderer.domElement.addEventListener('pointerleave', () => { state.isPointerDown = false; state.lastUV = null; });
+
+// ─── Animation Loop ───────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const time = clock.getElapsedTime();
+  if (state.turnips.length > 0) updateFlicker(time);
+  if (controls.enabled) controls.update();
+  composer.render();
+}
+
+// ─── Resize ───────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  bloomPass.resolution.set(Math.floor(w * 0.5), Math.floor(h * 0.5));
+});
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+setMode('rotate');
+animate();
+  </script>
+</body>
+</html>
